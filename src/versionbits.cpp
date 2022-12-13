@@ -248,14 +248,6 @@ int32_t VersionBitsCache::ComputeBlockVersion(const CBlockIndex* pindexPrev, con
         }
     }
 
-    if (!gArgs.GetBoolArg("-con_dyna_deploy_signal", true)) {
-        auto dynafed = Consensus::DeploymentPos::DEPLOYMENT_DYNA_FED;
-        int bit = params.vDeployments[dynafed].bit;
-        if (bit > 0 && bit < VERSIONBITS_NUM_BITS) {
-            nVersion &= ~Mask(params, dynafed);
-        }
-    }
-
     return nVersion;
 }
 

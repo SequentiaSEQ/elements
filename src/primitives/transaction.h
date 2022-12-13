@@ -42,9 +42,6 @@ public:
      * CAssetIssuance object. */
     static const uint32_t OUTPOINT_ISSUANCE_FLAG = (1 << 31);
 
-    /* If this flag is set, the CTxIn including this COutPoint
-     * is a peg-in input. */
-    static const uint32_t OUTPOINT_PEGIN_FLAG = (1 << 30);
 
     /* The inverse of the combination of the preceding flags. Used to
      * extract the original meaning of `n` as the index into the
@@ -99,9 +96,6 @@ public:
 
     CAssetIssuance assetIssuance;
 
-    /* If this is set to true, the input is interpreted as a
-     * peg-in claim and processed as such */
-    bool m_is_pegin = false;
 
     // END ELEMENTS
     //
@@ -141,7 +135,7 @@ public:
     explicit CTxIn(COutPoint prevoutIn, CScript scriptSigIn=CScript(), uint32_t nSequenceIn=SEQUENCE_FINAL);
     CTxIn(uint256 hashPrevTx, uint32_t nOut, CScript scriptSigIn=CScript(), uint32_t nSequenceIn=SEQUENCE_FINAL);
 
-    // ELEMENTS: explicit serialization methods for selective asset/pegin encoding
+    // ELEMENTS: explicit serialization methods for selective asset encoding
     template <typename Stream>
     inline void Serialize(Stream& s) const {
         bool fHasAssetIssuance;
@@ -152,8 +146,8 @@ public:
             fHasAssetIssuance = false;
             outpoint = prevout;
         } else {
-            // The issuance and pegin bits can't be set as it is used to indicate
-            // the presence of the asset issuance or pegin objects. They should
+            // The issuance bits can't be set as it is used to indicate
+            // the presence of the asset issuance  objects. They should
             // never be set anyway as that would require a parent
             // transaction with over one billion outputs.
             assert(!(prevout.n & ~COutPoint::OUTPOINT_INDEX_MASK));
@@ -167,9 +161,6 @@ public:
             outpoint.n = prevout.n & COutPoint::OUTPOINT_INDEX_MASK;
             if (fHasAssetIssuance) {
                 outpoint.n |= COutPoint::OUTPOINT_ISSUANCE_FLAG;
-            }
-            if (m_is_pegin) {
-                outpoint.n |= COutPoint::OUTPOINT_PEGIN_FLAG;
             }
         }
 
@@ -193,14 +184,10 @@ public:
             // No asset issuance for Coinbase inputs.
             fHasAssetIssuance = false;
             prevout = outpoint;
-            m_is_pegin = false;
-        } else {
+              } else {
             // The presence of the asset issuance object is indicated by
             // a bit set in the outpoint index field.
             fHasAssetIssuance = !!(outpoint.n & COutPoint::OUTPOINT_ISSUANCE_FLAG);
-            // The interpretation of this input as a peg-in is indicated by
-            // a bit set in the outpoint index field.
-            m_is_pegin = !!(outpoint.n & COutPoint::OUTPOINT_PEGIN_FLAG);
             // The mode, if set, must be masked out of the outpoint so
             // that the in-memory index field retains its traditional
             // meaning of identifying the index into the output array
@@ -397,11 +384,7 @@ inline void UnserializeTransaction(TxType& tx, Stream& s) {
             tx.witness.vtxoutwit.resize(tx.vout.size());
             for (size_t i = 0; i < tx.vin.size(); i++) {
                 s >> tx.witness.vtxinwit[i].scriptWitness.stack;
-                // ELEMENTS:
-                if (tx.vin[i].m_is_pegin) {
-                    s >> tx.witness.vtxinwit[i].m_pegin_witness.stack;
                 }
-            }
 
             if (!tx.HasWitness()) {
                 /* It's illegal to encode witnesses when all witness stacks are empty. */
@@ -464,11 +447,7 @@ inline void SerializeTransaction(const TxType& tx, Stream& s) {
             const_cast<CTxWitness*>(&tx.witness)->vtxoutwit.resize(tx.vout.size());
             for (size_t i = 0; i < tx.vin.size(); i++) {
                 s << tx.witness.vtxinwit[i].scriptWitness.stack;
-                // ELEMENTS:
-                if (tx.vin[i].m_is_pegin) {
-                    s << tx.witness.vtxinwit[i].m_pegin_witness.stack;
-                }
-            }
+                   }
         }
         s << tx.nLockTime;
     }

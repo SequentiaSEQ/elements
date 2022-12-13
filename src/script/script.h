@@ -60,8 +60,6 @@ static constexpr uint64_t VALIDATION_WEIGHT_PER_SIGOP_PASSED = 50;
 static constexpr uint64_t VALIDATION_WEIGHT_OFFSET = 50;
 
 // ELEMENTS:
-// Number of confirms on parent chain required to confirm on sidechain.
-static const unsigned int DEFAULT_PEGIN_CONFIRMATION_DEPTH = 8;
 
 template <typename T>
 std::vector<unsigned char> ToByteVector(const T& in)

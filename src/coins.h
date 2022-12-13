@@ -105,7 +105,6 @@ struct CCoinsCacheEntry
     Coin coin; // The actual cached data.
     unsigned char flags;
     // ELEMENTS:
-    bool peginSpent;
 
     enum Flags {
         /**
@@ -126,12 +125,6 @@ struct CCoinsCacheEntry
          * when this cache is flushed.
          */
         FRESH = (1 << 1),
-        // ELEMENTS:
-        /**
-         * PEGIN means the coin refers to an entry on the mainchain (coin is actually
-         * empty/useless, look at peginSpent instead)
-         */
-        PEGIN = (1 << 2),
     };
 
     CCoinsCacheEntry() : flags(0) {}
@@ -174,10 +167,6 @@ public:
     //! Just check whether a given outpoint is unspent.
     virtual bool HaveCoin(const COutPoint &outpoint) const;
 
-    // ELEMENTS:
-    //! Check if a given pegin has been spent
-    virtual bool IsPeginSpent(const std::pair<uint256, COutPoint> &outpoint) const;
-
     //! Retrieve the block hash whose state this CCoinsView currently represents
     virtual uint256 GetBestBlock() const;
 
@@ -218,8 +207,6 @@ public:
     bool BatchWrite(CCoinsMap &mapCoins, const uint256 &hashBlock) override;
     std::unique_ptr<CCoinsViewCursor> Cursor() const override;
     size_t EstimateSize() const override;
-    // ELEMENTS:
-    bool IsPeginSpent(const std::pair<uint256, COutPoint> &outpoint) const override;
 };
 
 
@@ -254,9 +241,6 @@ public:
     std::unique_ptr<CCoinsViewCursor> Cursor() const override {
         throw std::logic_error("CCoinsViewCache cursor iteration not supported.");
     }
-    // ELEMENTS:
-    bool IsPeginSpent(const std::pair<uint256, COutPoint> &outpoint) const override;
-    void SetPeginSpent(const std::pair<uint256, COutPoint> &outpoint, bool fSpent);
 
     /**
      * Check if we have the given utxo already loaded in this cache.
