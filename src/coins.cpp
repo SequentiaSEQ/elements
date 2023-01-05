@@ -14,8 +14,6 @@ uint256 CCoinsView::GetBestBlock() const { return uint256(); }
 std::vector<uint256> CCoinsView::GetHeadBlocks() const { return std::vector<uint256>(); }
 bool CCoinsView::BatchWrite(CCoinsMap &mapCoins, const uint256 &hashBlock) { return false; }
 std::unique_ptr<CCoinsViewCursor> CCoinsView::Cursor() const { return nullptr; }
-// ELEMENTS:
-bool CCoinsView::IsPeginSpent(const std::pair<uint256, COutPoint> &outpoint) const { return false; }
 
 bool CCoinsView::HaveCoin(const COutPoint &outpoint) const
 {
@@ -33,7 +31,6 @@ bool CCoinsViewBacked::BatchWrite(CCoinsMap &mapCoins, const uint256 &hashBlock)
 std::unique_ptr<CCoinsViewCursor> CCoinsViewBacked::Cursor() const { return base->Cursor(); }
 size_t CCoinsViewBacked::EstimateSize() const { return base->EstimateSize(); }
 // ELEMENTS:
-bool CCoinsViewBacked::IsPeginSpent(const std::pair<uint256, COutPoint> &outpoint) const { return base->IsPeginSpent(outpoint); }
 
 CCoinsViewCache::CCoinsViewCache(CCoinsView *baseIn) : CCoinsViewBacked(baseIn), cachedCoinsUsage(0) {}
 
@@ -42,7 +39,7 @@ size_t CCoinsViewCache::DynamicMemoryUsage() const {
 }
 
 // ELEMENTS:
-// Create a CCoinsMapKey for non-PEGIN utxo.
+// Create a CCoinsMapKey for utxo.
 static inline CCoinsMapKey native_key(const COutPoint& outpoint) {
     return std::make_pair(uint256(), outpoint);
 }
@@ -175,55 +172,6 @@ bool CCoinsViewCache::HaveCoinInCache(const COutPoint &outpoint) const {
     return (it != cacheCoins.end() && !it->second.coin.IsSpent());
 }
 
-//
-// ELEMENTS:
-
-bool CCoinsViewCache::IsPeginSpent(const std::pair<uint256, COutPoint> &outpoint) const {
-    assert(!outpoint.second.hash.IsNull());
-    assert(!outpoint.first.IsNull());
-
-    CCoinsMap::iterator it = cacheCoins.find(outpoint);
-    if (it == cacheCoins.end()) {
-        bool inserted;
-        std::tie(it, inserted) = cacheCoins.emplace(std::piecewise_construct,
-                std::forward_as_tuple(outpoint), std::tuple<>());
-        it->second.peginSpent = base->IsPeginSpent(outpoint);
-        it->second.flags |= CCoinsCacheEntry::PEGIN;
-        if (!it->second.peginSpent)
-            it->second.flags |= CCoinsCacheEntry::FRESH;
-    }
-    return it->second.peginSpent;
-}
-
-void CCoinsViewCache::SetPeginSpent(const std::pair<uint256, COutPoint> &outpoint, bool fSpent) {
-    assert(!outpoint.second.hash.IsNull());
-    assert(!outpoint.first.IsNull());
-
-    CCoinsMap::iterator it = cacheCoins.find(outpoint);
-
-    bool hadSpent;
-    if (it == cacheCoins.end())
-        hadSpent = base->IsPeginSpent(outpoint);
-    else
-        hadSpent = it->second.peginSpent;
-
-    // If we aren't changing spentness, don't do anything at all
-    if (hadSpent == fSpent)
-        return;
-
-    if (it == cacheCoins.end()) {
-        bool inserted;
-        std::tie(it, inserted) = cacheCoins.emplace(std::piecewise_construct,
-                std::forward_as_tuple(outpoint), std::tuple<>());
-        if (!hadSpent)
-            it->second.flags = CCoinsCacheEntry::FRESH;
-    }
-    it->second.peginSpent = fSpent;
-    it->second.flags |= CCoinsCacheEntry::PEGIN | CCoinsCacheEntry::DIRTY;
-}
-
-// END ELEMENTS
-//
 
 uint256 CCoinsViewCache::GetBestBlock() const {
     if (hashBlock.IsNull())
@@ -242,27 +190,19 @@ bool CCoinsViewCache::BatchWrite(CCoinsMap &mapCoins, const uint256 &hashBlockIn
             continue;
         }
 
-        // ELEMENTS:
-        bool fIsPegin = it->second.flags & CCoinsCacheEntry::PEGIN;
-
         CCoinsMap::iterator itUs = cacheCoins.find(it->first);
         if (itUs == cacheCoins.end()) {
             // The parent cache does not have an entry, while the child cache does
-            // We can ignore it if it's both FRESH and {pruned, spent pegin} in the child
-            if (!((it->second.flags & CCoinsCacheEntry::FRESH) &&
-                    (( fIsPegin && !it->second.peginSpent) ||
-                     (!fIsPegin &&  it->second.coin.IsSpent())))) {
+            // We can ignore it if it's both FRESH is in the child
+            //
+            if (!(it->second.flags & CCoinsCacheEntry::FRESH && it->second.coin.IsSpent())) {
                 // Create the coin in the parent cache, move the data up
                 // and mark it as dirty.
                 CCoinsCacheEntry& entry = cacheCoins[it->first];
-                entry.flags = CCoinsCacheEntry::DIRTY;
-                if (fIsPegin) {
-                    entry.peginSpent = it->second.peginSpent;
-                    entry.flags |= CCoinsCacheEntry::PEGIN;
-                } else {
-                    entry.coin = it->second.coin;
-                }
+                entry.coin = std::move(it->second.coin);
                 cachedCoinsUsage += entry.coin.DynamicMemoryUsage();
+                entry.flags = CCoinsCacheEntry::DIRTY;
+
                 // We can mark it FRESH in the parent if it was FRESH in the child
                 // Otherwise it might have just been flushed from the parent's cache
                 // and already exist in the grandparent
@@ -280,8 +220,7 @@ bool CCoinsViewCache::BatchWrite(CCoinsMap &mapCoins, const uint256 &hashBlockIn
                 throw std::logic_error("FRESH flag misapplied to coin that exists in parent cache");
             }
 
-            if ((itUs->second.flags & CCoinsCacheEntry::FRESH) &&
-                    ((fIsPegin && !it->second.peginSpent) || (!fIsPegin && it->second.coin.IsSpent()))) {
+            if ((itUs->second.flags & CCoinsCacheEntry::FRESH) && it->second.coin.IsSpent()) {
                 // The grandparent cache does not have an entry, and the coin
                 // has been spent. We can just delete it from the parent cache.
                 cachedCoinsUsage -= itUs->second.coin.DynamicMemoryUsage();
@@ -289,11 +228,7 @@ bool CCoinsViewCache::BatchWrite(CCoinsMap &mapCoins, const uint256 &hashBlockIn
             } else {
                 // A normal modification.
                 cachedCoinsUsage -= itUs->second.coin.DynamicMemoryUsage();
-                if (fIsPegin) {
-                    itUs->second.peginSpent = it->second.peginSpent;
-                } else {
-                    itUs->second.coin = it->second.coin;
-                }
+                itUs->second.coin = std::move(it->second.coin);
                 cachedCoinsUsage += itUs->second.coin.DynamicMemoryUsage();
                 itUs->second.flags |= CCoinsCacheEntry::DIRTY;
                 // NOTE: It isn't safe to mark the coin as FRESH in the parent
@@ -314,8 +249,8 @@ bool CCoinsViewCache::Flush() {
     return fOk;
 }
 
-void CCoinsViewCache::Uncache(const COutPoint& point)
-{
+void CCoinsViewCache::Uncache(const COutPoint& point) {
+
     CCoinsMap::iterator it = cacheCoins.find(native_key(point));
     if (it != cacheCoins.end() && it->second.flags == 0) {
         cachedCoinsUsage -= it->second.coin.DynamicMemoryUsage();
@@ -331,10 +266,7 @@ bool CCoinsViewCache::HaveInputs(const CTransaction& tx) const
 {
     if (!tx.IsCoinBase()) {
         for (unsigned int i = 0; i < tx.vin.size(); i++) {
-            if (tx.vin[i].m_is_pegin) {
-                continue;
-            }
-            if (!HaveCoin(tx.vin[i].prevout)) {
+              if (!HaveCoin(tx.vin[i].prevout)) {
                 return false;
             }
         }

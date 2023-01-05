@@ -5,6 +5,7 @@
 
 #ifndef BITCOIN_CONSENSUS_CONSENSUS_H
 #define BITCOIN_CONSENSUS_CONSENSUS_H
+ 
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -34,3 +35,15 @@ static constexpr unsigned int RELATIVETIME_VERIFY_SEQUENCE = (1 << 0);
 static constexpr unsigned int RELATIVETIME_MEDIAN_TIME_PAST = (1 << 0);
 
 #endif // BITCOIN_CONSENSUS_CONSENSUS_H
+
+#ifndef  PROOF_OF_STAKE_CONSENSUS_H 
+#define PROOF_OF_STAKE_CONSENSUS_H
+
+#include <stdlib.h>
+#include <stdint.h>
+
+static const unsigned int GOVERNANCE_VOTE
+
+static const unsigned int VALIDATION_BLOCK 
+
+

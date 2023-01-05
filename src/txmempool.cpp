@@ -9,7 +9,6 @@
 #include <consensus/consensus.h>
 #include <consensus/tx_verify.h>
 #include <consensus/validation.h>
-#include <pegins.h>
 #include <policy/fees.h>
 #include <policy/policy.h>
 #include <policy/settings.h>
@@ -25,11 +24,17 @@
 
 CTxMemPoolEntry::CTxMemPoolEntry(const CTransactionRef& _tx, const CAmount& _nFee,
                                  int64_t _nTime, unsigned int _entryHeight,
-                                 bool _spendsCoinbase, int64_t _sigOpsCost, LockPoints lp, const std::set<std::pair<uint256, COutPoint>>& _setPeginsSpent)
-    : tx(_tx), nFee(_nFee), nTxWeight(GetTransactionWeight(*tx)), nUsageSize(RecursiveDynamicUsage(tx)), nTime(_nTime), entryHeight(_entryHeight),
-    spendsCoinbase(_spendsCoinbase), sigOpCost(_sigOpsCost), lockPoints(lp),
-    setPeginsSpent(_setPeginsSpent)
-{
+                                 bool _spendsCoinbase, int64_t _sigOpsCost, LockPoints lp)
+    : tx(_tx),
+    nFee(_nFee),
+    nTxWeight(GetTransactionWeight(*tx)),
+    nUsageSize(RecursiveDynamicUsage(tx)),
+    nTime(_nTime),
+    entryHeight(_entryHeight),
+    spendsCoinbase(_spendsCoinbase),
+    sigOpCost(_sigOpsCost),
+    lockPoints(lp),
+   {
     nCountWithDescendants = 1;
     nSizeWithDescendants = GetTxSize();
     nModFeesWithDescendants = nFee;
@@ -541,24 +546,14 @@ void CTxMemPool::removeForReorg(CChainState& active_chainstate, int flags)
             mapTx.modify(it, update_lock_points(lp));
         }
 
-        // On re-org, remove *all* peg-in and PAK-based peg-outs due to possible
-        // invalidity from dynafed transitions
-        // TODO: Only boot out now-invalid transactions. Re-orgs are very rare in
-        // federated systems but can occasionally happen due to consensus algorithm.
-
         // Little hack to quickly check if any outputs are PAK ones
         // by sending in empty(reject) list.
         if (!IsPAKValidTx(tx, CPAKList(), Params().ParentGenesisBlockHash(), Params().GetConsensus().pegged_asset)) {
             txToRemove.insert(it);
             continue;
         }
-        for (const auto& input : tx.vin) {
-            if (input.m_is_pegin) {
-                txToRemove.insert(it);
-                break;
-            }
-        }
     }
+
     setEntries setAllRemoves;
     for (txiter it : txToRemove) {
         CalculateDescendants(it, setAllRemoves);
@@ -628,16 +623,12 @@ void CTxMemPool::removeForBlock(const std::vector<CTransactionRef>& vtx, unsigne
                     continue;
                 }
 
-                const auto& fedpegscripts = GetValidFedpegScripts(p_block_index_new, chainparams.GetConsensus(), true /* nextblock_validation */);
                 for (size_t nIn = 0; nIn < tx.vin.size(); nIn++) {
                     const CTxIn& in = tx.vin[nIn];
                     std::string err;
-                    if (in.m_is_pegin && (!tx.HasWitness() || !IsValidPeginWitness(tx.witness.vtxinwit[nIn].m_pegin_witness, fedpegscripts, in.prevout, err, true /* check_depth */))) {
-                        tx_to_remove.push_back(MakeTransactionRef(tx));
-                        break;
-                    }
                 }
             }
+
             for (auto& tx : tx_to_remove) {
                 const uint256 tx_id = tx->GetHash();
                 removeRecursive(*tx, MemPoolRemovalReason::BLOCK);
@@ -669,22 +660,15 @@ void CTxMemPool::clear()
     _clear();
 }
 
-static void CheckInputsAndUpdateCoins(CChainState& active_chainstate, const CTxMemPoolEntry& entry, CCoinsViewCache& mempoolDuplicate, const int64_t spendheight, std::set<std::pair<uint256, COutPoint>>& setGlobalPeginsSpent)
+static void CheckInputsAndUpdateCoins(CChainState& active_chainstate, const CTxMemPoolEntry& entry, CCoinsViewCache& mempoolDuplicate, const int64_t spendheight)
 {
     CTransaction tx = entry.GetTx();
     TxValidationState dummy_state; // Not used. CheckTxInputs() should always pass
     CAmountMap fee_map;
-    std::set<std::pair<uint256, COutPoint> > setPeginsSpent;
     const auto& fedpegscripts = GetValidFedpegScripts(active_chainstate.m_chain.Tip(), Params().GetConsensus(), true /* nextblock_validation */);
-    bool fCheckResult = tx.IsCoinBase() || Consensus::CheckTxInputs(tx, dummy_state, mempoolDuplicate, spendheight, fee_map, setPeginsSpent, NULL, false, true, fedpegscripts);
+    bool fCheckResult = tx.IsCoinBase() || Consensus::CheckTxInputs(tx, dummy_state, mempoolDuplicate, spendheight, fee_map, NULL, false, true, fedpegscripts);
     assert(fCheckResult);
     UpdateCoins(tx, mempoolDuplicate, std::numeric_limits<int>::max());
-
-    // ELEMENTS:
-    assert(setPeginsSpent == entry.setPeginsSpent);
-    size_t prevPeginsCount = setGlobalPeginsSpent.size();
-    setGlobalPeginsSpent.insert(setPeginsSpent.begin(), setPeginsSpent.end());
-    assert(setGlobalPeginsSpent.size() == prevPeginsCount + setPeginsSpent.size());
 }
 
 void CTxMemPool::check(CChainState& active_chainstate) const
@@ -706,8 +690,6 @@ void CTxMemPool::check(CChainState& active_chainstate) const
     const int64_t spendheight = active_chainstate.m_chain.Height() + 1;
 
     std::list<const CTxMemPoolEntry*> waitingOnDependants;
-    // ELEMENTS:
-    std::set<std::pair<uint256, COutPoint> > setGlobalPeginsSpent;
 
     for (indexed_transaction_set::const_iterator it = mapTx.begin(); it != mapTx.end(); it++) {
         unsigned int i = 0;
@@ -727,8 +709,7 @@ void CTxMemPool::check(CChainState& active_chainstate) const
                 fDependsWait = true;
                 setParentCheck.insert(*it2);
             } else {
-                // peg-in inputs are not sanity-checked to be valid
-                assert(txin.m_is_pegin || active_coins_tip.HaveCoin(txin.prevout));
+                assert(active_coins_tip.HaveCoin(txin.prevout));
             }
             // Check whether its inputs are marked in mapNextTx.
             auto it3 = mapNextTx.find(txin.prevout);
@@ -783,7 +764,7 @@ void CTxMemPool::check(CChainState& active_chainstate) const
         if (fDependsWait)
             waitingOnDependants.push_back(&(*it));
         else {
-            CheckInputsAndUpdateCoins(active_chainstate, *it, mempoolDuplicate, spendheight, setGlobalPeginsSpent);
+            CheckInputsAndUpdateCoins(active_chainstate, *it, mempoolDuplicate, spendheight);
         }
     }
     unsigned int stepsSinceLastRemove = 0;
@@ -795,7 +776,7 @@ void CTxMemPool::check(CChainState& active_chainstate) const
             stepsSinceLastRemove++;
             assert(stepsSinceLastRemove < waitingOnDependants.size());
         } else {
-            CheckInputsAndUpdateCoins(active_chainstate, *entry, mempoolDuplicate, spendheight, setGlobalPeginsSpent);
+            CheckInputsAndUpdateCoins(active_chainstate, *entry, mempoolDuplicate, spendheight);
             stepsSinceLastRemove = 0;
         }
     }
@@ -806,14 +787,6 @@ void CTxMemPool::check(CChainState& active_chainstate) const
         assert(it2 != mapTx.end());
         assert(&tx == it->second);
     }
-
-    //
-    // ELEMENTS:
-    for (std::set<std::pair<uint256, COutPoint> >::const_iterator it = setGlobalPeginsSpent.begin(); it != setGlobalPeginsSpent.end(); it++) {
-        assert(!active_coins_tip.IsPeginSpent(*it));
-    }
-    // END ELEMENTS
-    //
 
     assert(totalTxSize == checkTotal);
     assert(m_total_fee == check_total_fee);
@@ -1023,11 +996,6 @@ void CCoinsViewMemPool::PackageAddTransaction(const CTransactionRef& tx)
     for (unsigned int n = 0; n < tx->vout.size(); ++n) {
         m_temp_added.emplace(COutPoint(tx->GetHash(), n), Coin(tx->vout[n], MEMPOOL_HEIGHT, false));
     }
-}
-
-// ELEMENTS:
-bool CCoinsViewMemPool::IsPeginSpent(const std::pair<uint256, COutPoint> &outpoint) const {
-    return base->IsPeginSpent(outpoint);
 }
 
 size_t CTxMemPool::DynamicMemoryUsage() const {

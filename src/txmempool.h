@@ -119,7 +119,7 @@ public:
                     int64_t _nTime, unsigned int _entryHeight,
                     bool spendsCoinbase,
                     int64_t nSigOpsCost, LockPoints lp,
-                    const std::set<std::pair<uint256, COutPoint>>& setPeginsSpent);
+                    const std::set<std::pair<uint256, COutpoint>>);
 
     const CTransaction& GetTx() const { return *this->tx; }
     CTransactionRef GetSharedTx() const { return this->tx; }
@@ -884,8 +884,6 @@ public:
     /** Add the coins created by this transaction. These coins are only temporarily stored in
      * m_temp_added and cannot be flushed to the back end. Only used for package validation. */
     void PackageAddTransaction(const CTransactionRef& tx);
-    // ELEMENTS:
-    bool IsPeginSpent(const std::pair<uint256, COutPoint> &outpoint) const override;
 };
 
 /**

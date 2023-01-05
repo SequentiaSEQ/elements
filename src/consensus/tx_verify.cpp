@@ -6,10 +6,9 @@
 
 #include <consensus/consensus.h>
 #include <consensus/validation.h>
-#include <pegins.h>
 #include <primitives/transaction.h>
 #include <script/interpreter.h>
-#include <script/pegins.h>
+
 
 // TODO remove the following dependencies
 #include <chain.h>
@@ -65,10 +64,6 @@ std::pair<int, int64_t> CalculateSequenceLocks(const CTransaction &tx, int flags
     for (size_t txinIndex = 0; txinIndex < tx.vin.size(); txinIndex++) {
         const CTxIn& txin = tx.vin[txinIndex];
 
-        // Peg-ins have no output height
-        if (txin.m_is_pegin) {
-            continue;
-        }
 
         // Sequence numbers with the most significant bit set are not
         // treated as relative lock-times, nor are they given any
@@ -142,10 +137,6 @@ unsigned int GetP2SHSigOpCount(const CTransaction& tx, const CCoinsViewCache& in
     unsigned int nSigOps = 0;
     for (unsigned int i = 0; i < tx.vin.size(); i++)
     {
-        // Peg-in inputs are segwit-only
-        if (tx.vin[i].m_is_pegin) {
-            continue;
-        }
 
         const Coin& coin = inputs.AccessCoin(tx.vin[i].prevout);
         assert(!coin.IsSpent());
@@ -171,21 +162,9 @@ int64_t GetTransactionSigOpCost(const CTransaction& tx, const CCoinsViewCache& i
     for (unsigned int i = 0; i < tx.vin.size(); i++)
     {
         CScript scriptPubKey;
-        if (tx.vin[i].m_is_pegin) {
-            std::string err;
-            // Make sure witness exists and has enough peg-in witness fields for
-            // the claim_script
-            if (tx.witness.vtxinwit.size() != tx.vin.size() ||
-                    tx.witness.vtxinwit[i].m_pegin_witness.stack.size() < 4) {
-                continue;
-            }
-            const auto pegin_witness = tx.witness.vtxinwit[i].m_pegin_witness;
-            scriptPubKey = CScript(pegin_witness.stack[3].begin(), pegin_witness.stack[3].end());
-        } else {
-            const Coin& coin = inputs.AccessCoin(tx.vin[i].prevout);
-            assert(!coin.IsSpent());
-            scriptPubKey = coin.out.scriptPubKey;
-        }
+        const Coin& coin = inputs.AccessCoin(tx.vin[i].prevout);
+        assert(!coin.IsSpent());
+        scriptPubKey = coin.out.scriptPubKey;
 
         const CScriptWitness* pScriptWitness = tx.witness.vtxinwit.size() > i ? &tx.witness.vtxinwit[i].scriptWitness : NULL;
         nSigOps += CountWitnessSigOps(tx.vin[i].scriptSig, scriptPubKey, pScriptWitness, flags);
@@ -193,7 +172,7 @@ int64_t GetTransactionSigOpCost(const CTransaction& tx, const CCoinsViewCache& i
     return nSigOps;
 }
 
-bool Consensus::CheckTxInputs(const CTransaction& tx, TxValidationState& state, const CCoinsViewCache& inputs, int nSpendHeight, CAmountMap& fee_map, std::set<std::pair<uint256, COutPoint>>& setPeginsSpent, std::vector<CCheck*> *pvChecks, const bool cacheStore, bool fScriptChecks, const std::vector<std::pair<CScript, CScript>>& fedpegscripts)
+bool Consensus::CheckTxInputs(const CTransaction& tx, TxValidationState& state, const CCoinsViewCache& inputs, int nSpendHeight, CAmountMap& fee_map, const bool cacheStore)
 {
     // are the actual inputs available?
     if (!inputs.HaveInputs(tx)) {
@@ -205,44 +184,19 @@ bool Consensus::CheckTxInputs(const CTransaction& tx, TxValidationState& state, 
     CAmount nValueIn = 0;
     for (unsigned int i = 0; i < tx.vin.size(); ++i) {
         const COutPoint &prevout = tx.vin[i].prevout;
-        if (tx.vin[i].m_is_pegin) {
-            // Check existence and validity of pegin witness
-            std::string err;
-            if (tx.witness.vtxinwit.size() <= i || !IsValidPeginWitness(tx.witness.vtxinwit[i].m_pegin_witness, fedpegscripts, prevout, err, true)) {
-                return state.Invalid(TxValidationResult::TX_WITNESS_MUTATED, "bad-pegin-witness", err);
-            }
-            std::pair<uint256, COutPoint> pegin = std::make_pair(uint256(tx.witness.vtxinwit[i].m_pegin_witness.stack[2]), prevout);
-            if (inputs.IsPeginSpent(pegin)) {
-                return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-double-pegin", strprintf("Double-pegin of %s:%d", prevout.hash.ToString(), prevout.n));
-            }
-            if (setPeginsSpent.count(pegin)) {
-                return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-double-pegin-in-obj",
-                    strprintf("Double-pegin of %s:%d in single tx/block", prevout.hash.ToString(), prevout.n));
-            }
-            setPeginsSpent.insert(pegin);
+        const Coin& coin = inputs.AccessCoin(prevout);
+        assert(!coin.IsSpent());
 
-            // Tally the input amount.
-            spent_inputs.push_back(GetPeginOutputFromWitness(tx.witness.vtxinwit[i].m_pegin_witness));
-            const CTxOut& out = spent_inputs.back();
-            nValueIn += out.nValue.GetAmount(); // Non-explicit already filtered by IsValidPeginWitness
-            if (!MoneyRange(out.nValue.GetAmount())) {
-                return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-inputvalues-outofrange");
-            }
-        } else {
-            const Coin& coin = inputs.AccessCoin(prevout);
-            assert(!coin.IsSpent());
-
-            // If prev is coinbase, check that it's matured
-            if (coin.IsCoinBase() && nSpendHeight - coin.nHeight < COINBASE_MATURITY) {
-                return state.Invalid(TxValidationResult::TX_PREMATURE_SPEND, "bad-txns-premature-spend-of-coinbase",
+        // If prev is coinbase, check that it's matured
+        if (coin.IsCoinBase() && nSpendHeight - coin.nHeight < COINBASE_MATURITY) {
+            return state.Invalid(TxValidationResult::TX_PREMATURE_SPEND, "bad-txns-premature-spend-of-coinbase",
                     strprintf("tried to spend coinbase at depth %d", nSpendHeight - coin.nHeight));
             }
-            spent_inputs.push_back(coin.out);
-            if (coin.out.nValue.IsExplicit()) {
-                nValueIn += coin.out.nValue.GetAmount();
+        spent_inputs.push_back(coin.out);
+        if (coin.out.nValue.IsExplicit()) {
+            nValueIn += coin.out.nValue.GetAmount();
             }
         }
-    }
 
     if (g_con_elementsmode) {
         // Tally transaction fees

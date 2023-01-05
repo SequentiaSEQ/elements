@@ -228,9 +228,7 @@ static const CRPCConvertParam vRPCConvertParams[] =
     { "sendmany", 9 , "ignoreblindfail" },
     { "sendtoaddress", 10, "ignoreblindfail" },
     { "calculateasset", 1, "vout" },
-    { "calculateasset", 3, "blind_reissuance" },
-    { "updatepsbtpegin", 1, "input" },
-    { "updatepsbtpegin", 2, "value" },
+    { "calculateasset", 3, "blind_reissuance" }
 
 };
 // clang-format on

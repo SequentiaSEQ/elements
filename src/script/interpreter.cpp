@@ -133,8 +133,7 @@ static inline void pushspk(std::vector<valtype>& stack, const CScript& scriptPub
 template <class T>
 inline unsigned char GetOutpointFlag(const T& txin)
 {
-    return static_cast<unsigned char> ((!txin.assetIssuance.IsNull() ? (COutPoint::OUTPOINT_ISSUANCE_FLAG >> 24) : 0) |
-            (txin.m_is_pegin ? (COutPoint::OUTPOINT_PEGIN_FLAG >> 24) : 0));
+    return static_cast<unsigned char> ((!txin.assetIssuance.IsNull() ? (COutPoint::OUTPOINT_ISSUANCE_FLAG >> 24) : 0));
 }
 
 bool static IsCompressedOrUncompressedPubKey(const valtype &vchPubKey) {

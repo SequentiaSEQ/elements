@@ -26,12 +26,10 @@
 #include <node/blockstorage.h>
 #include <node/coinstats.h>
 #include <node/ui_interface.h>
-#include <pegins.h>
 #include <policy/policy.h>
 #include <policy/settings.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
-#include <script/pegins.h>
 #include <random.h>
 #include <reverse_iterator.h>
 #include <script/script.h>
@@ -265,12 +263,6 @@ bool CheckSequenceLocks(CBlockIndex* tip,
         prevheights.resize(tx.vin.size());
         for (size_t txinIndex = 0; txinIndex < tx.vin.size(); txinIndex++) {
             const CTxIn& txin = tx.vin[txinIndex];
-            // pegins should not restrict validity of sequence locks
-            if (txin.m_is_pegin) {
-                prevheights[txinIndex] = -1;
-                continue;
-            }
-
             Coin coin;
             if (!coins_view.GetCoin(txin.prevout, coin)) {
                 return error("%s: Missing input", __func__);
@@ -306,6 +298,8 @@ bool CheckSequenceLocks(CBlockIndex* tip,
                     maxInputHeight = std::max(maxInputHeight, height);
                 }
             }
+            // tip->GetAncestor(maxInputHeight) should never return a nullptr
+            // because it is less then the height of the chaintip
             lp->maxInputBlock = tip->GetAncestor(maxInputHeight);
         }
     }
@@ -404,10 +398,6 @@ static bool CheckInputsFromMempoolAndCache(const CTransaction& tx, TxValidationS
 
     assert(!tx.IsCoinBase());
     for (const CTxIn& txin : tx.vin) {
-        if (txin.m_is_pegin) {
-            continue;
-        }
-
         const Coin& coin = view.AccessCoin(txin.prevout);
 
         // This coin was checked in PreChecks and MemPoolAccept
@@ -484,7 +474,6 @@ private:
     struct Workspace {
         explicit Workspace(const CTransactionRef& ptx) : m_ptx(ptx), m_hash(ptx->GetHash()) {}
         std::set<uint256> m_conflicts;
-        std::set<std::pair<uint256, COutPoint> > m_set_pegins_spent;
         CTxMemPool::setEntries m_all_conflicting;
         CTxMemPool::setEntries m_ancestors;
         std::unique_ptr<CTxMemPoolEntry> m_entry;
@@ -575,7 +564,6 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     CAmount& nModifiedFees = ws.m_modified_fees;
     CAmount& nConflictingFees = ws.m_conflicting_fees;
     size_t& nConflictingSize = ws.m_conflicting_size;
-    std::set<std::pair<uint256, COutPoint> >& setPeginsSpent = ws.m_set_pegins_spent;
 
     if (!CheckTransaction(tx, state)) {
         return false; // state filled in by CheckTransaction
@@ -666,45 +654,10 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     LockPoints lp;
     m_view.SetBackend(m_viewmempool);
 
-    // Quickly check for peg-in witness data on non-peg-in inputs
-    for (size_t input_index = 0; input_index < tx.vin.size(); ++input_index) {
-        if (!tx.vin[input_index].m_is_pegin) {
-            // Check that the corresponding pegin witness is empty
-            // Note that the witness vector must be size 0 or len(vin)
-            if (!tx.witness.vtxinwit.empty() &&
-                    !tx.witness.vtxinwit[input_index].m_pegin_witness.IsNull()) {
-                return state.Invalid(TxValidationResult::TX_WITNESS_MUTATED, "extra-pegin-witness");
-            }
-        }
-    }
-
-    // Used when checking peg-ins
-    std::vector<std::pair<CScript, CScript>> fedpegscripts = GetValidFedpegScripts(m_active_chainstate.m_chain.Tip(), chainparams.GetConsensus(), true /* nextblock_validation */);
-
-    const CCoinsViewCache& coins_cache = m_active_chainstate.CoinsTip();
+     const CCoinsViewCache& coins_cache = m_active_chainstate.CoinsTip();
     // do all inputs exist?
     for (unsigned int i = 0; i < tx.vin.size(); i++) {
         const CTxIn& txin = tx.vin[i];
-
-        // ELEMENTS:
-        // For pegin inputs check whether the pegins have already been claimed before.
-        // This only checks the UTXO set for already claimed pegins. For mempool conflicts,
-        // we rely on the GetConflictTx check done above.
-        if (txin.m_is_pegin) {
-            // Peg-in witness is required, check here without validating existence in parent chain
-            std::string err_msg = "no peg-in witness attached";
-            if (tx.witness.vtxinwit.size() != tx.vin.size() ||
-                    !IsValidPeginWitness(tx.witness.vtxinwit[i].m_pegin_witness, fedpegscripts, tx.vin[i].prevout, err_msg, false)) {
-                return state.Invalid(TxValidationResult::TX_WITNESS_MUTATED, "pegin-no-witness", err_msg);
-            }
-
-            std::pair<uint256, COutPoint> pegin = std::make_pair(uint256(tx.witness.vtxinwit[i].m_pegin_witness.stack[2]), tx.vin[i].prevout);
-            // This assumes non-null prevout and genesis block hash
-            if (m_view.IsPeginSpent(pegin)) {
-                return state.Invalid(TxValidationResult::TX_CONSENSUS, "pegin-already-claimed");
-            }
-            continue;
-        }
 
         if (!coins_cache.HaveCoinInCache(txin.prevout)) {
             coins_to_uncache.push_back(txin.prevout);
@@ -744,7 +697,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         return state.Invalid(TxValidationResult::TX_PREMATURE_SPEND, "non-BIP68-final");
 
     CAmountMap fee_map;
-    if (!Consensus::CheckTxInputs(tx, state, m_view, m_active_chainstate.m_blockman.GetSpendHeight(m_view), fee_map, setPeginsSpent, NULL, true, true, fedpegscripts)) {
+    if (!Consensus::CheckTxInputs(tx, state, m_view, m_active_chainstate.m_blockman.GetSpendHeight(m_view), fee_map, NULL, true, true)) {
         return false; // state filled in by CheckTxInputs
     }
 
@@ -783,10 +736,6 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     // during reorgs to ensure COINBASE_MATURITY is still met.
     bool fSpendsCoinbase = false;
     for (const CTxIn &txin : tx.vin) {
-        // ELEMENTS:
-        if (txin.m_is_pegin) {
-            continue;
-        }
         const Coin &coin = m_view.AccessCoin(txin.prevout);
         if (coin.IsCoinBase()) {
             fSpendsCoinbase = true;
@@ -795,7 +744,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     }
 
     entry.reset(new CTxMemPoolEntry(ptx, ws.m_base_fees, nAcceptTime, m_active_chainstate.m_chain.Height(),
-            fSpendsCoinbase, nSigOpsCost, lp, setPeginsSpent));
+            fSpendsCoinbase, nSigOpsCost));
     unsigned int nSize = entry->GetTxSize();
 
     if (nSigOpsCost > MAX_STANDARD_TX_SIGOPS_COST)
@@ -1431,19 +1380,11 @@ void UpdateCoins(const CTransaction& tx, CCoinsViewCache& inputs, CTxUndo &txund
         txundo.vprevout.reserve(tx.vin.size());
         for (size_t i = 0; i < tx.vin.size(); i++) {
             const CTxIn& txin = tx.vin[i];
-            if (txin.m_is_pegin) {
-                const CTxInWitness& txinwit = tx.witness.vtxinwit[i];
-                std::pair<uint256, COutPoint> outpoint = std::make_pair(uint256(txinwit.m_pegin_witness.stack[2]), txin.prevout);
-                inputs.SetPeginSpent(outpoint, true);
-                // Dummy undo
-                txundo.vprevout.emplace_back();
-            } else {
                 txundo.vprevout.emplace_back();
                 bool is_spent = inputs.SpendCoin(txin.prevout, &txundo.vprevout.back());
                 assert(is_spent);
             }
         }
-    }
     // add outputs
     AddCoins(inputs, tx, nHeight);
 }
@@ -1536,15 +1477,7 @@ bool CheckInputScripts(const CTransaction& tx, TxValidationState& state,
 
         for (unsigned int i = 0; i < tx.vin.size(); i++) {
             const COutPoint& prevout = tx.vin[i].prevout;
-            // ELEMENTS:
-            // If input is peg-in, create "coin" to evaluate against
-            Coin pegin_coin;
-            if (tx.vin[i].m_is_pegin) {
-                // Height of "output" in script evaluation will be 0
-                pegin_coin = Coin(GetPeginOutputFromWitness(tx.witness.vtxinwit[i].m_pegin_witness), 0, false);
-            }
-            const Coin& coin = tx.vin[i].m_is_pegin ? pegin_coin : inputs.AccessCoin(prevout);
-            // end ELEMENTS
+            const Coin& coin = inputs.AccessCoin(prevout);
             assert(!coin.IsSpent());
             spent_outputs.emplace_back(coin.out);
         }
@@ -1836,34 +1769,12 @@ static int64_t nTimeCallbacks = 0;
 static int64_t nTimeTotal = 0;
 static int64_t nBlocksTotal = 0;
 
-bool CheckPeginRipeness(const CBlock& block, const std::vector<std::pair<CScript, CScript>>& fedpegscripts) {
-    for (unsigned int i = 0; i < block.vtx.size(); i++) {
-        const CTransaction &tx = *(block.vtx[i]);
-
-        if (!tx.IsCoinBase()) {
-            for (unsigned int i = 0; i < tx.vin.size(); ++i) {
-                if (tx.vin[i].m_is_pegin) {
-                    std::string err;
-                    bool depth_failed = false;
-                    if ((tx.witness.vtxinwit.size() <= i) || !IsValidPeginWitness(tx.witness.vtxinwit[i].m_pegin_witness, fedpegscripts, tx.vin[i].prevout, err, true, &depth_failed)) {
-                        if (depth_failed) {
-                            return false;  // Pegins not ripe.
-                        } else {
-                            return true;  // Some other failure; details later.
-                        }
-                    }
-                }
-            }
-        }
-    }
-    return true;
-}
 
 /** Apply the effects of this block (with given index) on the UTXO set represented by coins.
  *  Validity checks that depend on the UTXO set are also done; ConnectBlock()
  *  can fail if those validity checks fail (among other reasons). */
 bool CChainState::ConnectBlock(const CBlock& block, BlockValidationState& state, CBlockIndex* pindex,
-                  CCoinsViewCache& view, std::set<std::pair<uint256, COutPoint>>* setPeginsSpent, bool fJustCheck)
+                  CCoinsViewCache& view, bool fJustCheck)
 {
     AssertLockHeld(cs_main);
     assert(pindex);
@@ -2609,12 +2520,6 @@ bool CChainState::ConnectTip(BlockValidationState& state, CBlockIndex* pindexNew
     }
     const CBlock& blockConnecting = *pthisBlock;
 
-    const auto& fedpegscripts = GetValidFedpegScripts(pindexNew, m_params.GetConsensus(), false /* nextblock_validation */);
-    if (!CheckPeginRipeness(blockConnecting, fedpegscripts)) {
-        LogPrintf("STALLING further progress in ConnectTip while waiting for parent chain daemon to catch up! Chain will not grow until this is remedied!\n");
-        fStall = true;
-        return true;
-    }
 
     // Apply the block atomically to the chain state.
     int64_t nTime2 = GetTimeMicros(); nTimeReadFromDisk += nTime2 - nTime1;

@@ -1,7 +1,6 @@
 
 #include <confidential_validation.h>
 #include <issuance.h>
-#include <pegins.h>
 #include <script/sigcache.h>
 #include <blind.h>
 

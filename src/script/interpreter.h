@@ -154,6 +154,15 @@ enum
     // Support/allow SIGHASH_RANGEPROOF.
     //
     SCRIPT_SIGHASH_RANGEPROOF = (1U << 22),
+    
+    // Support/allow RELATIVETIME
+    
+    //BIP113
+    SCRIPT_RELATIVETIME = (1U << 23),
+    
+    // Support/allow NLOCKTIME
+    //
+    SCRIPT_NLOCKTIME = (1U << 24),
 };
 
 bool CheckSignatureEncoding(const std::vector<unsigned char> &vchSig, unsigned int flags, ScriptError* serror);

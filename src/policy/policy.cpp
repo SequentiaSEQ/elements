@@ -10,7 +10,6 @@
 #include <consensus/validation.h>
 #include <coins.h>
 #include <primitives/pak.h>
-#include <script/pegins.h>
 #include <span.h>
 #include <chainparams.h> // Peg-out enforcement
 
@@ -181,11 +180,6 @@ bool AreInputsStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs,
 
     for (unsigned int i = 0; i < tx.vin.size(); i++)
     {
-        if (tx.vin[i].m_is_pegin) {
-            // This deals with p2sh in general only
-            continue;
-        }
-
         const CTxOut& prev = mapInputs.AccessCoin(tx.vin[i].prevout).out;
 
         std::vector<std::vector<unsigned char> > vSolutions;
@@ -229,7 +223,7 @@ bool IsWitnessStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs)
             continue;
         }
 
-        const CTxOut &prev = tx.vin[i].m_is_pegin ? GetPeginOutputFromWitness(tx.witness.vtxinwit[i].m_pegin_witness) : mapInputs.AccessCoin(tx.vin[i].prevout).out;
+        const CTxOut &prev = mapInputs.AccessCoin(tx.vin[i].prevout).out;
 
         // get the scriptPubKey corresponding to this input:
         CScript prevScript = prev.scriptPubKey;

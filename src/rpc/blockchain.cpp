@@ -42,7 +42,6 @@
 #include <validationinterface.h>
 #include <versionbits.h>
 #include <warnings.h>
-#include <pegins.h>
 #include <dynafed.h>
 
 #include <stdint.h>
@@ -2869,7 +2868,6 @@ static RPCHelpMan getsidechaininfo()
                         {RPCResult::Type::STR, "parent_chain_signblockscript_asm", "If the parent chain has signed blocks, its signblockscript in ASM"},
                         {RPCResult::Type::STR_HEX, "parent_chain_signblockscript_hex", "If the parent chain has signed blocks, its signblockscript in hex"},
                         {RPCResult::Type::STR_HEX, "parent_pegged_asset", "If the parent chain has Confidential Assets, the asset id of the pegged asset in that chain"},
-                        {RPCResult::Type::NUM, "pegin_confirmation_depth", "The number of mainchain confirmations required for a peg-in transaction to become valid"},
                         {RPCResult::Type::BOOL, "enforce_pak", "If peg-out authorization is being enforced"},
                     }},
                 RPCExamples{
@@ -2902,8 +2900,7 @@ static RPCHelpMan getsidechaininfo()
     obj.pushKV("parent_blockhash", parent_blockhash.GetHex());
     obj.pushKV("parent_chain_has_pow", consensus.ParentChainHasPow());
     obj.pushKV("enforce_pak", Params().GetEnforcePak());
-    obj.pushKV("pegin_confirmation_depth", (uint64_t)consensus.pegin_min_depth);
-    if (!consensus.ParentChainHasPow()) {
+        if (!consensus.ParentChainHasPow()) {
         obj.pushKV("parent_chain_signblockscript_asm", ScriptToAsmStr(consensus.parent_chain_signblockscript));
         obj.pushKV("parent_chain_signblockscript_hex", HexStr(consensus.parent_chain_signblockscript));
         obj.pushKV("parent_pegged_asset", consensus.parent_pegged_asset.GetHex());

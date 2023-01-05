@@ -60,8 +60,6 @@ static constexpr uint64_t VALIDATION_WEIGHT_PER_SIGOP_PASSED = 50;
 static constexpr uint64_t VALIDATION_WEIGHT_OFFSET = 50;
 
 // ELEMENTS:
-// Number of confirms on parent chain required to confirm on sidechain.
-static const unsigned int DEFAULT_PEGIN_CONFIRMATION_DEPTH = 8;
 
 template <typename T>
 std::vector<unsigned char> ToByteVector(const T& in)
@@ -148,7 +146,14 @@ enum opcodetype
     OP_EQUALVERIFY = 0x88,
     OP_RESERVED1 = 0x89,
     OP_RESERVED2 = 0x8a,
-
+    
+    // stack
+    
+    OP_SWAP = 0x7c,
+    OP_2SWAP = 0x72,
+    OP_TOALTSTACK = 0X6b,
+    OP_FROMALTSTACK = 0x6c,
+        
     // numeric
     OP_1ADD = 0x8b,
     OP_1SUB = 0x8c,
@@ -213,6 +218,7 @@ enum opcodetype
     OP_NOP8 = 0xb7,
     OP_NOP9 = 0xb8,
     OP_NOP10 = 0xb9,
+    
 
     // Opcode added by BIP 342 (Tapscript)
     OP_CHECKSIGADD = 0xba,
